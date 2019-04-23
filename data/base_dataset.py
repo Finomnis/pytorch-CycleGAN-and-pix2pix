@@ -8,6 +8,7 @@ import torch.utils.data as data
 from PIL import Image
 import torchvision.transforms as transforms
 from abc import ABC, abstractmethod
+import torch
 
 
 class BaseDataset(data.Dataset, ABC):
@@ -77,8 +78,20 @@ def get_params(opt, size):
 
     return {'crop_pos': (x, y), 'flip': flip}
 
+def get_color_noise_transform():
+    transform_list = []
+    transform_list += [transforms.ColorJitter(0.5, 0.5, 0.3, 0.2)]
+    transform_list += [transforms.RandomGrayscale()]
+    return transforms.Compose(transform_list)
 
-def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True):
+def augment_with_noise(img):
+    mean = 0
+    std = 0.03*random.random()
+    noiseTensor = torch.from_numpy(np.random.normal(mean, std, img.shape))
+    noisy_img = img + noiseTensor.type(torch.FloatTensor)
+    return np.clip(noisy_img, 0, 1)
+
+def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, convert=True, add_noise=False):
     transform_list = []
     if grayscale:
         transform_list.append(transforms.Grayscale(1))
@@ -97,6 +110,9 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
     if opt.preprocess == 'none':
         transform_list.append(transforms.Lambda(lambda img: __make_power_2(img, base=4, method=method)))
 
+    if add_noise:
+        transform_list.append(get_color_noise_transform())
+
     if not opt.no_flip:
         if params is None:
             transform_list.append(transforms.RandomHorizontalFlip())
@@ -105,10 +121,14 @@ def get_transform(opt, params=None, grayscale=False, method=Image.BICUBIC, conve
 
     if convert:
         transform_list += [transforms.ToTensor()]
+        if add_noise:
+            transform_list += [transforms.Lambda(lambda x: augment_with_noise(x))]
+
         if grayscale:
             transform_list += [transforms.Normalize((0.5,), (0.5,))]
         else:
             transform_list += [transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+
     return transforms.Compose(transform_list)
 
 
