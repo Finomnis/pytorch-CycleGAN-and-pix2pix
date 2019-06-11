@@ -479,7 +479,8 @@ class CondUnetGenerator(nn.Module):
         """
         super(CondUnetGenerator, self).__init__()
         # construct unet structure
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=None, norm_layer=norm_layer, innermost=True)  # add the innermost layer
+        unet_block = ConditionalSideInputBlock()
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
@@ -491,6 +492,30 @@ class CondUnetGenerator(nn.Module):
     def forward(self, input):
         """Standard forward"""
         return self.model(input)
+
+
+class ConditionalSideInputBlock(nn.Module):
+    """Defines a conditional side input block for Conditional Unet.
+        Its function is to add a second external 1-d tensor to the given training tensor.
+    """
+
+    def __init__(self):
+        super(ConditionalSideInputBlock, self).__init__()
+
+    def forward(self, x, cond):
+
+        cond_orig_size = list(cond.size())
+
+        # Fill in missing dimensions
+        while cond.dim() < x.dim():
+            cond = cond.unsqueeze(cond.dim())
+
+        # Expand to match the size of x
+        target_size = cond_orig_size + list(x.size()[2:])
+        cond = cond.expand(target_size)
+
+        # Concat
+        return torch.cat([x, cond], 1)
 
 
 class UnetSkipConnectionBlock(nn.Module):
