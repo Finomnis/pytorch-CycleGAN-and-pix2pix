@@ -541,7 +541,10 @@ class UnetSkipConnectionBlock(nn.Module):
                                         padding=1, bias=use_bias)
             down = [downrelu, downconv]
             up = [uprelu, upconv, upnorm]
-            model = down + up
+            if submodule:
+                model = down + [submodule] + up
+            else:
+                model = down + up
         else:
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
                                         kernel_size=4, stride=2,
@@ -556,11 +559,21 @@ class UnetSkipConnectionBlock(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, x):
+    def forward(self, x, *args):
+
+        current_data = x
+        for step in self.model:
+            if isinstance(step, UnetSkipConnectionBlock) or isinstance(step, ConditionalSideInputBlock) and args:
+                current_data = step.forward(current_data, *args)
+            else:
+                current_data = step.forward(current_data)
+
         if self.outermost:
-            return self.model(x)
+            result_data = current_data
         else:   # add skip connections
-            return torch.cat([x, self.model(x)], 1)
+            result_data = torch.cat([x, current_data], 1)
+
+        return result_data
 
 
 class NLayerDiscriminator(nn.Module):
