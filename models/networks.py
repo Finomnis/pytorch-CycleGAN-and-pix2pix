@@ -461,6 +461,73 @@ class UnetGenerator(nn.Module):
         return self.model(input)
 
 
+class StyleExtractionGenerator(nn.Module):
+    """Create a simple CNN downsampling followed by averaging to extract style information from image"""
+
+    def __init__(self, input_nc, num_downs, ngf=64, norm_layer=nn.BatchNorm2d):
+        """Construct a Unet generator
+        Parameters:
+            input_nc (int)  -- the number of channels in input images
+            output_nc (int) -- the number of channels in output images
+            num_downs (int) -- the number of downsamplings in UNet. For example, # if |num_downs| == 7,
+                                image of size 128x128 will become of size 1x1 # at the bottleneck
+            ngf (int)       -- the number of filters in the last conv layer
+            norm_layer      -- normalization layer
+
+        We construct the U-Net from the innermost layer to the outermost layer.
+        It is a recursive process.
+        """
+
+        super(StyleExtractionGenerator, self).__init__()
+        # Original structure of UNet:
+        # # construct unet structure
+        # unet_block = ConditionalSideInputBlock()
+        # unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
+        # for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
+        #     unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
+        # # gradually reduce the number of filters from ngf * 8 to ngf
+        # unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        # unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        # unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
+        # self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
+
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        layers = list()
+        layers.append(nn.Conv2d(input_nc, ngf, kernel_size=4, stride=2, padding=1, bias=use_bias))
+
+        layers.append(nn.LeakyReLU(0.2, True))
+        layers.append(nn.Conv2d(ngf, ngf*2, kernel_size=4, stride=2, padding=1, bias=use_bias))
+        layers.append(norm_layer(ngf*2))
+
+        layers.append(nn.LeakyReLU(0.2, True))
+        layers.append(nn.Conv2d(ngf*2, ngf*4, kernel_size=4, stride=2, padding=1, bias=use_bias))
+        layers.append(norm_layer(ngf*4))
+
+        layers.append(nn.LeakyReLU(0.2, True))
+        layers.append(nn.Conv2d(ngf*4, ngf*8, kernel_size=4, stride=2, padding=1, bias=use_bias))
+        layers.append(norm_layer(ngf*8))
+
+        for i in range(num_downs - 5):
+            layers.append(nn.LeakyReLU(0.2, True))
+            layers.append(nn.Conv2d(ngf * 8, ngf * 8, kernel_size=4, stride=2, padding=1, bias=use_bias))
+            layers.append(norm_layer(ngf * 8))
+
+        self.output_nc = ngf*8
+
+        layers.append(nn.LeakyReLU(0.2, True))
+        layers.append(nn.Conv2d(ngf * 8, self.output_nc, kernel_size=4, stride=2, padding=1, bias=use_bias))
+
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, input):
+        """Standard forward"""
+        return self.model(input)
+
+
 class CondUnetGenerator(nn.Module):
     """Create a Unet-based conditional generator"""
 
@@ -480,7 +547,10 @@ class CondUnetGenerator(nn.Module):
         super(CondUnetGenerator, self).__init__()
         # construct unet structure
         unet_block = ConditionalSideInputBlock()
-        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
+
+        self.style_extractor = StyleExtractionGenerator(input_nc, num_downs, ngf)
+
+        unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, side_inputs=self.style_extractor.output_nc, input_nc=None, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
             unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
         # gradually reduce the number of filters from ngf * 8 to ngf
@@ -491,7 +561,9 @@ class CondUnetGenerator(nn.Module):
 
     def forward(self, input):
         """Standard forward"""
-        return self.model(input)
+        # Compute style conditional
+        style = self.style_extractor(input)
+        return self.model(input, style)
 
 
 class ConditionalSideInputBlock(nn.Module):
@@ -504,7 +576,7 @@ class ConditionalSideInputBlock(nn.Module):
 
     def forward(self, x, cond):
 
-        cond_orig_size = list(cond.size())
+        cond_orig_size = list(cond.size())[:2]
 
         # Fill in missing dimensions
         while cond.dim() < x.dim():
@@ -515,7 +587,8 @@ class ConditionalSideInputBlock(nn.Module):
         cond = cond.expand(target_size)
 
         # Concat
-        return torch.cat([x, cond], 1)
+        result = torch.cat([x, cond], 1)
+        return result
 
 
 class UnetSkipConnectionBlock(nn.Module):
@@ -525,7 +598,7 @@ class UnetSkipConnectionBlock(nn.Module):
     """
 
     def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
+                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False, side_inputs=0):
         """Construct a Unet submodule with skip connections.
 
         Parameters:
@@ -561,7 +634,7 @@ class UnetSkipConnectionBlock(nn.Module):
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
         elif innermost:
-            upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
+            upconv = nn.ConvTranspose2d(inner_nc+side_inputs, outer_nc,
                                         kernel_size=4, stride=2,
                                         padding=1, bias=use_bias)
             down = [downrelu, downconv]
@@ -589,9 +662,9 @@ class UnetSkipConnectionBlock(nn.Module):
         current_data = x
         for step in self.model:
             if isinstance(step, UnetSkipConnectionBlock) or isinstance(step, ConditionalSideInputBlock) and args:
-                current_data = step.forward(current_data, *args)
+                current_data = step(current_data, *args)
             else:
-                current_data = step.forward(current_data)
+                current_data = step(current_data)
 
         if self.outermost:
             result_data = current_data
