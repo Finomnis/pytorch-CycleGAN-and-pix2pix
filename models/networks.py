@@ -563,8 +563,19 @@ class CondUnetGenerator(nn.Module):
         """Standard forward"""
         # Compute style conditional
         style = self.style_extractor(input)
-        return self.model(input, style)
+        return self.model(input, style), style
 
+
+def expand_to_same_size(inp, ref):
+    inp_orig_size = list(inp.size())[:2]
+
+    # Fill in missing dimensions
+    while inp.dim() < ref.dim():
+        inp = inp.unsqueeze(inp.dim())
+
+    # Expand to match the size of x
+    target_size = inp_orig_size + list(ref.size()[2:])
+    return inp.expand(target_size)
 
 class ConditionalSideInputBlock(nn.Module):
     """Defines a conditional side input block for Conditional Unet.
@@ -576,15 +587,17 @@ class ConditionalSideInputBlock(nn.Module):
 
     def forward(self, x, cond):
 
-        cond_orig_size = list(cond.size())[:2]
+        #cond_orig_size = list(cond.size())[:2]
 
-        # Fill in missing dimensions
-        while cond.dim() < x.dim():
-            cond = cond.unsqueeze(cond.dim())
+        ## Fill in missing dimensions
+        #while cond.dim() < x.dim():
+        #    cond = cond.unsqueeze(cond.dim())
 
-        # Expand to match the size of x
-        target_size = cond_orig_size + list(x.size()[2:])
-        cond = cond.expand(target_size)
+        ## Expand to match the size of x
+        #target_size = cond_orig_size + list(x.size()[2:])
+        #cond = cond.expand(target_size)
+
+        cond = expand_to_same_size(cond, x)
 
         # Concat
         result = torch.cat([x, cond], 1)
