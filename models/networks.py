@@ -559,10 +559,10 @@ class CondUnetGenerator(nn.Module):
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
         self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
 
-    def forward(self, input):
+    def forward(self, input, styleInput):
         """Standard forward"""
         # Compute style conditional
-        style = self.style_extractor(input)
+        style = self.style_extractor(styleInput)
         return self.model(input, style), style
 
 

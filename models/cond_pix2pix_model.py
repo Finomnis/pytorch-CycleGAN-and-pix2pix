@@ -93,7 +93,7 @@ class CondPix2PixModel(BaseModel):
 
     def forward(self):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.fake_B, self.extracted_style = self.netG(self.real_A)  # G(A)
+        self.fake_B, self.extracted_style = self.netG(self.real_A, self.real_B)  # G(A)
 
         if self.forward_style_to_D:
             self.expanded_style = networks.expand_to_same_size(self.extracted_style, self.fake_B)
