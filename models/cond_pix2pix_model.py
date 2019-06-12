@@ -88,7 +88,7 @@ class CondPix2PixModel(BaseModel):
         """Run forward pass; called by both functions <optimize_parameters> and <test>."""
         self.fake_B = self.netG(self.real_A)  # G(A)
 
-        if True:
+        if False:
             make_dot(self.fake_B).render('checkpoints/graph_g', cleanup=True, view=True)
             exit(1)
 
