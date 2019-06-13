@@ -525,7 +525,7 @@ class StyleExtractionGenerator(nn.Module):
 
     def forward(self, input):
         """Standard forward"""
-        return self.model(input)
+        return self.model(input).mean(list(range(2, input.dim())))
 
 
 class CondUnetGenerator(nn.Module):
