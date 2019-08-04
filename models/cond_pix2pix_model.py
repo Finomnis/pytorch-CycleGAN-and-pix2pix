@@ -55,7 +55,10 @@ class CondPix2PixModel(BaseModel):
         else:  # during test time, only load G
             self.model_names = ['G']
 
-        self.forward_style_to_D = not opt.dont_use_style_in_D
+        if 'dont_use_style_in_D' in opt.__dict__:
+            self.forward_style_to_D = not opt.dont_use_style_in_D
+        else:
+            self.forward_style_to_D = True
 
         # define networks (both generator and discriminator)
         self.netG = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
