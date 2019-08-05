@@ -562,10 +562,10 @@ class CondUnetGenerator(nn.Module):
         # unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
         # self.model = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
 
-        unet_block = UnetAsymmetricSkipConnectionBlock(ngf_down*4, ngf_down*4, ngf_up*8, ngf_down*4 + self.style_extractor.output_nc, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
-        unet_block = UnetAsymmetricSkipConnectionBlock(ngf_down*4, ngf_down*4, ngf_up*4, ngf_up*8, submodule=unet_block, norm_layer=norm_layer)
+        unet_block = UnetAsymmetricSkipConnectionBlock(ngf_down*4, ngf_down*4, ngf_up*4, ngf_down*4 + self.style_extractor.output_nc, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         unet_block = UnetAsymmetricSkipConnectionBlock(ngf_down*2, ngf_down*4, ngf_up*2, ngf_up*4, submodule=unet_block, norm_layer=norm_layer)
-        self.model = UnetAsymmetricSkipConnectionBlock(input_nc, ngf_down*2, output_nc, ngf_up*2, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
+        unet_block = UnetAsymmetricSkipConnectionBlock(ngf_down*1, ngf_down*2, ngf_up*1, ngf_up*2, submodule=unet_block, norm_layer=norm_layer)
+        self.model = UnetAsymmetricSkipConnectionBlock(input_nc, ngf_down*1, output_nc, ngf_up*1, submodule=unet_block, outermost=True, norm_layer=norm_layer)  # add the outermost layer
 
     def forward(self, input, styleInput):
         """Standard forward"""
