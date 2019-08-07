@@ -507,34 +507,51 @@ class StyleExtractionGenerator(nn.Module):
         layers.append(nn.Conv2d(ngf*2, ngf*4, kernel_size=4, stride=2, padding=1, bias=use_bias))
         layers.append(norm_layer(ngf*4))
 
-        layers.append(nn.LeakyReLU(0.2, True))
-        layers.append(nn.Conv2d(ngf*4, ngf*8, kernel_size=4, stride=2, padding=1, bias=use_bias))
-        layers.append(norm_layer(ngf*8))
-
-        for i in range(num_downs - 5):
+        for i in range(num_downs - 3):
             layers.append(nn.LeakyReLU(0.2, True))
-            layers.append(nn.Conv2d(ngf * 8, ngf * 8, kernel_size=4, stride=2, padding=1, bias=use_bias))
-            layers.append(norm_layer(ngf * 8))
-
-        self.output_nc = ngf*8
+            layers.append(nn.Conv2d(ngf * 4, ngf * 4, kernel_size=4, stride=2, padding=1, bias=use_bias))
+            layers.append(norm_layer(ngf * 4))
 
         layers.append(nn.LeakyReLU(0.2, True))
-        layers.append(nn.Conv2d(ngf * 8, self.output_nc, kernel_size=4, stride=2, padding=1, bias=use_bias))
 
         self.model = nn.Sequential(*layers)
 
-    def forward(self, input):
+        self.output_nc = self._get_num_channels()
+
+    def _get_num_channels(self):
+        with torch.no_grad():
+            num_channels = 0
+            current_data = torch.zeros(1, 3, 512, 512)
+            for step in self.model:
+                print(step)
+                current_data = step(current_data)
+                if isinstance(step, nn.LeakyReLU):
+                    num_channels += current_data.shape[1]
+            return num_channels
+
+    def forward(self, x):
+        result_array = []
+
         """Standard forward"""
-        result = self.model(input)
-        while result.dim() > 2:
-            result, _ = result.max(2)
+        current_data = x
+        for step in self.model:
+            current_data = step(current_data)
+            if isinstance(step, nn.LeakyReLU):
+                extracted_data = current_data
+                while extracted_data.dim() > 2:
+                    extracted_data, _ = extracted_data.max(2)
+                result_array.append(extracted_data)
+
+        result = torch.cat(result_array, 1)
+        #print('result:', result.shape)
+
         return result
 
 
 class CondUnetGenerator(nn.Module):
     """Create a Unet-based conditional generator"""
 
-    def __init__(self, input_nc, output_nc, num_downs, ngf_style=64, ngf_down=16, ngf_up=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
+    def __init__(self, input_nc, output_nc, num_downs, ngf_style=32, ngf_down=16, ngf_up=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
         """Construct a Unet generator
         Parameters:
             input_nc (int)  -- the number of channels in input images
@@ -551,7 +568,7 @@ class CondUnetGenerator(nn.Module):
         # construct unet structure
         unet_block = ConditionalSideInputBlock()
 
-        self.style_extractor = StyleExtractionGenerator(input_nc, num_downs, ngf_style)
+        self.style_extractor = StyleExtractionGenerator(input_nc, 4, ngf_style)
 
         # unet_block = UnetSkipConnectionBlock(ngf * 8, ngf * 8, side_inputs=self.style_extractor.output_nc, input_nc=None, submodule=unet_block, norm_layer=norm_layer, innermost=True)  # add the innermost layer
         # for i in range(num_downs - 5):          # add intermediate layers with ngf * 8 filters
