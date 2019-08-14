@@ -525,7 +525,6 @@ class StyleExtractionGenerator(nn.Module):
             num_channels = 0
             current_data = torch.zeros(1, 3, 512, 512)
             for step in self.model:
-                print(step)
                 current_data = step(current_data)
                 if isinstance(step, nn.LeakyReLU):
                     num_channels += current_data.shape[1]
