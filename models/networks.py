@@ -149,6 +149,8 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
         net = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout)
     elif netG == 'unet_256_cond':
         net = CondUnetGenerator(input_nc, output_nc, 8, norm_layer=norm_layer, use_dropout=use_dropout)
+    elif netG == 'unet_256_cond_bg':
+        net = CondUnetHandwritingWithBackgroundGenerator(input_nc, output_nc, 8, norm_layer=norm_layer, use_dropout=use_dropout)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -591,6 +593,44 @@ class CondUnetGenerator(nn.Module):
         return self.model(input, style), style
 
 
+class CondUnetHandwritingWithBackgroundGenerator(nn.Module):
+    """Create a Unet-based conditional generator"""
+
+    def __init__(self, input_nc, output_nc, num_downs, ngf_style=64, ngf_down=16, ngf_up=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
+        """Construct a Unet generator
+        Parameters:
+            input_nc (int)  -- the number of channels in input images
+            output_nc (int) -- the number of channels in output images
+            num_downs (int) -- the number of downsamplings in UNet. For example, # if |num_downs| == 7,
+                                image of size 128x128 will become of size 1x1 # at the bottleneck
+            ngf (int)       -- the number of filters in the last conv layer
+            norm_layer      -- normalization layer
+
+        We construct the U-Net from the innermost layer to the outermost layer.
+        It is a recursive process.
+        """
+        super(CondUnetHandwritingWithBackgroundGenerator, self).__init__()
+        # construct unet structure
+
+        self.style_extractor = StyleExtractionGenerator(input_nc, num_downs, ngf_style)
+
+        unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=1, encoder_inner_nc=1, decoder_outer_nc=ngf_up*8,  decoder_inner_nc=1, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer, innermost=True)  # add the innermost layer
+        for i in range(num_downs - 8):          # add intermediate layers with ngf * 8 filters
+           unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=1, encoder_inner_nc=1, decoder_outer_nc=ngf_up*8,  decoder_inner_nc=ngf_up*8, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer)  # add the innermost layer
+        # gradually reduce the number of filters from ngf * 8 to ngf
+        unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=ngf_down*4, encoder_inner_nc=1,          decoder_outer_nc=ngf_up*8,  decoder_inner_nc=ngf_up*8, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer)  # add the innermost layer
+        unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=ngf_down*4, encoder_inner_nc=ngf_down*4, decoder_outer_nc=ngf_up*4,  decoder_inner_nc=ngf_up*8, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer)  # add the innermost layer
+        unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=ngf_down*2, encoder_inner_nc=ngf_down*4, decoder_outer_nc=ngf_up*2,  decoder_inner_nc=ngf_up*4, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer)
+        unet_block = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=ngf_down*1, encoder_inner_nc=ngf_down*2, decoder_outer_nc=ngf_up*1,  decoder_inner_nc=ngf_up*2, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, norm_layer=norm_layer)
+        self.model = UnetAsymmetricConditionalSkipConnectionBlock(encoder_outer_nc=input_nc,   encoder_inner_nc=ngf_down*1, decoder_outer_nc=output_nc, decoder_inner_nc=ngf_up*1, submodule=unet_block, sideinput_nc=self.style_extractor.output_nc, outermost=True, norm_layer=norm_layer)  # add the outermost layer
+
+    def forward(self, input, styleInput):
+        """Standard forward"""
+        # Compute style conditional
+        style = self.style_extractor(styleInput)
+        return self.model(input, style), style
+
+
 def expand_to_same_size(inp, ref):
     inp_orig_size = list(inp.size())[:2]
 
@@ -700,6 +740,104 @@ class UnetAsymmetricSkipConnectionBlock(nn.Module):
 
         return result_data
 
+
+class SideInputInjectionModule(nn.Module):
+
+    def __init__(self, main_nc, sideinput_nc):
+        super(SideInputInjectionModule, self).__init__()
+        self.conv = nn.Conv2d(sideinput_nc, main_nc, kernel_size=1, bias=False)
+
+    def forward(self, x, cond):
+        cond = expand_to_same_size(cond, x)
+        cond_weighted = self.conv(cond)
+        return x + cond_weighted
+
+
+
+class UnetAsymmetricConditionalSkipConnectionBlock(nn.Module):
+    """Defines the Unet submodule with skip connection.
+        X -------------------identity----------------------
+        |-- downsampling -- |submodule| -- upsampling --|
+    """
+
+    def __init__(self, encoder_outer_nc, encoder_inner_nc, decoder_outer_nc, decoder_inner_nc, sideinput_nc,
+                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
+        """Construct a Unet submodule with skip connections.
+
+        Parameters:
+            encoder_outer_nc (int) -- the number of filters in the outer conv layer of the encoder side
+            encoder_inner_nc (int) -- the number of filters in the inner conv layer of the encoder side
+            decoder_outer_nc (int) -- the number of filters in the outer conv layer of the decoder side
+            decoder_inner_nc (int) -- the number of filters in the inner conv layer of the decoder side
+            submodule (UnetSkipConnectionBlock) -- previously defined submodules
+            outermost (bool)    -- if this module is the outermost module
+            innermost (bool)    -- if this module is the innermost module
+            norm_layer          -- normalization layer
+            use_dropout (bool) -- if use dropout layers.
+        """
+        super(UnetAsymmetricConditionalSkipConnectionBlock, self).__init__()
+        self.outermost = outermost
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        downconv = nn.Conv2d(encoder_outer_nc, encoder_inner_nc, kernel_size=4,
+                             stride=2, padding=1, bias=use_bias)
+        downrelu = nn.LeakyReLU(0.2, True)
+        downnorm = norm_layer(encoder_inner_nc)
+        uprelu = nn.ReLU(True)
+        upnorm = norm_layer(decoder_outer_nc)
+
+        if outermost:
+            upconv = nn.ConvTranspose2d(encoder_inner_nc + decoder_inner_nc, decoder_outer_nc,
+                                        kernel_size=4, stride=2,
+                                        padding=1)
+            up = [uprelu, upconv, nn.Tanh()]
+            down = [downconv]
+            model = down + [submodule] + up
+
+        elif innermost:
+            upconv = nn.ConvTranspose2d(decoder_inner_nc, decoder_outer_nc,
+                                        kernel_size=4, stride=2,
+                                        padding=1, bias=use_bias)
+            sideinput = SideInputInjectionModule(decoder_outer_nc, sideinput_nc)
+            down = [downrelu, downconv]
+            up = [uprelu, upconv, sideinput, upnorm]
+            if submodule:
+                model = down + [submodule] + up
+            else:
+                model = down + up
+        else:
+            upconv = nn.ConvTranspose2d(encoder_inner_nc + decoder_inner_nc, decoder_outer_nc,
+                                        kernel_size=4, stride=2,
+                                        padding=1, bias=use_bias)
+            sideinput = SideInputInjectionModule(decoder_outer_nc, sideinput_nc)
+            down = [downrelu, downconv, downnorm]
+            up = [uprelu, upconv, sideinput, upnorm]
+
+            if use_dropout:
+                model = down + [submodule] + up + [nn.Dropout(0.5)]
+            else:
+                model = down + [submodule] + up
+
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x, *args):
+
+        current_data = x
+        for step in self.model:
+            if isinstance(step, UnetAsymmetricConditionalSkipConnectionBlock) or isinstance(step, SideInputInjectionModule) and args:
+                current_data = step(current_data, *args)
+            else:
+                current_data = step(current_data)
+
+        if self.outermost:
+            result_data = current_data
+        else:   # add skip connections
+            result_data = torch.cat([x, current_data], 1)
+
+        return result_data
 
 class UnetSkipConnectionBlock(nn.Module):
     """Defines the Unet submodule with skip connection.
